@@ -44,6 +44,8 @@ module Ra10ke::Deprecation
           # For Ruby 2.4 support
           begin # rubocop:disable Style/RedundantBegin
             module_name = "#{mod[:namespace] || mod[:name]}-#{mod[:name]}"
+
+            puts "debugging: #{mod}"
             forge_data = PuppetForge::Module.find(module_name)
 
             next forge_data if forge_data.deprecated_at
