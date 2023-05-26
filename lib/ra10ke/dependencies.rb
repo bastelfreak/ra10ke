@@ -65,7 +65,11 @@ module Ra10ke::Dependencies
           next if ignored_modules.include? puppet_module.title
           if puppet_module.class == ::R10K::Module::Forge
             module_name = puppet_module.title.gsub('/', '-')
-            forge_version = ::PuppetForge::Module.find(module_name).current_release.version
+            begin
+              forge_version = ::PuppetForge::Module.find(module_name).current_release.version
+            rescue Faraday::ResourceNotFound
+              raise PuppetForge::ModuleNotFound.new("Module #{module_name} not found on forge.puppet.com")
+            end
             installed_version = puppet_module.expected_version
             {
               name: puppet_module.title,
