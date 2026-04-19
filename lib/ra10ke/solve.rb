@@ -50,36 +50,12 @@ module Ra10ke::Solve
       # List of modules we have in the Puppetfile, as [name, version] pairs
       @current_modules = []
 
+      # Pass 1: Process git modules first so their metadata populates @processed_modules
+      # before any Forge module's transitive dependencies are resolved. This prevents
+      # add_reqs_to_graph from fetching stale Forge release metadata for modules that
+      # are explicitly pinned as git modules in the Puppetfile.
       puppetfile.modules.each do |puppet_module|
         next if ignore_modules.include? puppet_module.title
-
-        if puppet_module.instance_of?(R10K::Module::Forge)
-          module_name = puppet_module.title.tr('/', '-')
-          installed_version = puppet_module.expected_version
-          puts "Processing Forge module #{module_name}-#{installed_version}"
-          @current_modules << [module_name, installed_version]
-          @graph.artifact(module_name, installed_version)
-          constraint = '>=0.0.0'
-          unless allow_major_bump
-            ver = Semverse::Version.new installed_version
-            if ver.major.zero?
-              constraint = "~>#{installed_version}"
-            else
-              nver = Semverse::Version.new([ver.major + 1, 0, 0])
-              constraint = "<#{nver}"
-            end
-          end
-          puts "...Adding a demand: #{module_name} #{constraint}"
-
-          @demands.add([module_name, constraint])
-          puts '...Fetching latest release version information'
-          forge_rel = PuppetForge::Module.find(module_name).current_release
-          mod = @graph.artifact(module_name, forge_rel.version)
-          puts '...Adding its requirements to the graph'
-          meta = get_release_metadata(module_name, forge_rel)
-          add_reqs_to_graph(mod, meta)
-        end
-
         next unless puppet_module.instance_of?(R10K::Module::Git)
 
         # This downloads the git module to modules/modulename
@@ -94,7 +70,43 @@ module Ra10ke::Solve
         mod = @graph.artifact(module_name, version)
         puts "...Adding requirements for git module #{module_name}-#{version}"
         add_reqs_to_graph(mod, meta)
+        # Mark as processed so Forge transitive dependency resolution skips this module
+        @processed_modules.add(module_name)
       end
+
+      # Pass 2: Process Forge modules. Any git module already in @processed_modules will
+      # be skipped by add_reqs_to_graph when encountered as a transitive dependency.
+      # rubocop:disable Style/CombinableLoops
+      puppetfile.modules.each do |puppet_module|
+        next if ignore_modules.include? puppet_module.title
+        next unless puppet_module.instance_of?(R10K::Module::Forge)
+
+        module_name = puppet_module.title.tr('/', '-')
+        installed_version = puppet_module.expected_version
+        puts "Processing Forge module #{module_name}-#{installed_version}"
+        @current_modules << [module_name, installed_version]
+        @graph.artifact(module_name, installed_version)
+        constraint = '>=0.0.0'
+        unless allow_major_bump
+          ver = Semverse::Version.new installed_version
+          if ver.major.zero?
+            constraint = "~>#{installed_version}"
+          else
+            nver = Semverse::Version.new([ver.major + 1, 0, 0])
+            constraint = "<#{nver}"
+          end
+        end
+        puts "...Adding a demand: #{module_name} #{constraint}"
+
+        @demands.add([module_name, constraint])
+        puts '...Fetching latest release version information'
+        forge_rel = PuppetForge::Module.find(module_name).current_release
+        mod = @graph.artifact(module_name, forge_rel.version)
+        puts '...Adding its requirements to the graph'
+        meta = get_release_metadata(module_name, forge_rel)
+        add_reqs_to_graph(mod, meta)
+      end
+      # rubocop:enable Style/CombinableLoops
       puts
       puts 'Resolving dependencies...'
       puts 'WARNING:  Potentially breaking updates are allowed for this resolution' if allow_major_bump
