@@ -50,24 +50,26 @@ module Ra10ke::Solve
       # List of modules we have in the Puppetfile, as [name, version] pairs
       @current_modules = []
 
-      # Pre-pass: seed @processed_modules with the names of ALL git modules before any
-      # processing begins. This prevents add_reqs_to_graph from fetching Forge releases
-      # for a git module that appears as a transitive dependency of another git module
-      # that is processed earlier — regardless of declaration order in the Puppetfile.
-      # rubocop:disable Style/CombinableLoops
+      # Single pass: partition modules into git/Forge arrays and simultaneously seed
+      # @processed_modules with all git module names. Seeding upfront prevents
+      # add_reqs_to_graph from fetching Forge releases for any git module encountered
+      # as a transitive dependency, regardless of declaration order in the Puppetfile.
+      git_modules = []
+      forge_modules = []
       puppetfile.modules.each do |puppet_module|
         next if ignore_modules.include? puppet_module.title
-        next unless puppet_module.instance_of?(R10K::Module::Git)
 
-        @processed_modules.add(puppet_module.title.tr('/', '-'))
+        if puppet_module.instance_of?(R10K::Module::Forge)
+          forge_modules << puppet_module
+        elsif puppet_module.instance_of?(R10K::Module::Git)
+          @processed_modules.add(puppet_module.title.tr('/', '-'))
+          git_modules << puppet_module
+        end
       end
 
-      # Pass 1: Process git modules first so their metadata populates the graph before
+      # Process git modules first so their metadata populates the graph before
       # any Forge module's transitive dependencies are resolved.
-      puppetfile.modules.each do |puppet_module|
-        next if ignore_modules.include? puppet_module.title
-        next unless puppet_module.instance_of?(R10K::Module::Git)
-
+      git_modules.each do |puppet_module|
         # This downloads the git module to modules/modulename
         meta = fetch_git_metadata(puppet_module)
         version = get_key_or_sym(meta, :version)
@@ -82,12 +84,9 @@ module Ra10ke::Solve
         add_reqs_to_graph(mod, meta)
       end
 
-      # Pass 2: Process Forge modules. Any git module already in @processed_modules will
+      # Process Forge modules. Any git module already in @processed_modules will
       # be skipped by add_reqs_to_graph when encountered as a transitive dependency.
-      puppetfile.modules.each do |puppet_module|
-        next if ignore_modules.include? puppet_module.title
-        next unless puppet_module.instance_of?(R10K::Module::Forge)
-
+      forge_modules.each do |puppet_module|
         module_name = puppet_module.title.tr('/', '-')
         installed_version = puppet_module.expected_version
         puts "Processing Forge module #{module_name}-#{installed_version}"
@@ -113,7 +112,6 @@ module Ra10ke::Solve
         meta = get_release_metadata(module_name, forge_rel)
         add_reqs_to_graph(mod, meta)
       end
-      # rubocop:enable Style/CombinableLoops
       puts
       puts 'Resolving dependencies...'
       puts 'WARNING:  Potentially breaking updates are allowed for this resolution' if allow_major_bump
