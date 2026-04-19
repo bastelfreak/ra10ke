@@ -50,10 +50,20 @@ module Ra10ke::Solve
       # List of modules we have in the Puppetfile, as [name, version] pairs
       @current_modules = []
 
-      # Pass 1: Process git modules first so their metadata populates @processed_modules
-      # before any Forge module's transitive dependencies are resolved. This prevents
-      # add_reqs_to_graph from fetching stale Forge release metadata for modules that
-      # are explicitly pinned as git modules in the Puppetfile.
+      # Pre-pass: seed @processed_modules with the names of ALL git modules before any
+      # processing begins. This prevents add_reqs_to_graph from fetching Forge releases
+      # for a git module that appears as a transitive dependency of another git module
+      # that is processed earlier — regardless of declaration order in the Puppetfile.
+      # rubocop:disable Style/CombinableLoops
+      puppetfile.modules.each do |puppet_module|
+        next if ignore_modules.include? puppet_module.title
+        next unless puppet_module.instance_of?(R10K::Module::Git)
+
+        @processed_modules.add(puppet_module.title.tr('/', '-'))
+      end
+
+      # Pass 1: Process git modules first so their metadata populates the graph before
+      # any Forge module's transitive dependencies are resolved.
       puppetfile.modules.each do |puppet_module|
         next if ignore_modules.include? puppet_module.title
         next unless puppet_module.instance_of?(R10K::Module::Git)
@@ -70,13 +80,10 @@ module Ra10ke::Solve
         mod = @graph.artifact(module_name, version)
         puts "...Adding requirements for git module #{module_name}-#{version}"
         add_reqs_to_graph(mod, meta)
-        # Mark as processed so Forge transitive dependency resolution skips this module
-        @processed_modules.add(module_name)
       end
 
       # Pass 2: Process Forge modules. Any git module already in @processed_modules will
       # be skipped by add_reqs_to_graph when encountered as a transitive dependency.
-      # rubocop:disable Style/CombinableLoops
       puppetfile.modules.each do |puppet_module|
         next if ignore_modules.include? puppet_module.title
         next unless puppet_module.instance_of?(R10K::Module::Forge)
